@@ -72,7 +72,7 @@ def main():
         name_S = "S_{0}".format(feat_join)
         name_LLR = "LLR_{0}".format(feat_join)
 
-        _group = train.groupby(feat)
+        _group = train.groupby(feat, sort=False)
 
         p_S = _group.apply(trans_group_count)
         p_LLR = _group.apply(trans_llr, c1=c1, c2=c2)

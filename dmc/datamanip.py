@@ -26,7 +26,6 @@ def trans_llr(x, c1, c2):
 
 def batch_summarize(bat_df, u_feats, wi_feats):
     # a) per batch features: U.iid, U.size ...
-
     u_names = map(lambda n: 'U_{0}'.format(n),
         [x if type(x) is str else '_'.join(x) for x in u_feats])
 
@@ -37,7 +36,7 @@ def batch_summarize(bat_df, u_feats, wi_feats):
 
     # b) within feature features: WIiid.size ...
     for wi_feat, agg_feats in wi_feats.items():
-        _group = bat_df.groupby(wi_feat)
+        _group = bat_df.groupby(wi_feat, sort=False)
 
         for _feat in agg_feats:
             wi_name = "WI{0}_{1}".format(wi_feat, feature_name(_feat))
