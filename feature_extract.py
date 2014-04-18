@@ -9,8 +9,10 @@ Author: Xin Yin <xinyin at iastate dot edu>
 """
 
 from collections import defaultdict, Counter
-from itertools import combinations, izip from argparse import ArgumentParser 
-from dmc.datamanip import trans_group_count, trans_llr
+from itertools import combinations, izip 
+from argparse import ArgumentParser 
+
+from dmc.datamanip import trans_group_count, trans_llr, batch_summarize
 
 import os
 import logging
@@ -22,6 +24,14 @@ import numpy as np
 GLOBAL_FEATURES = ['iid']
 #GLOBAL_FEATURES = ['iid', 'size', 'color', ('iid', 'size'), 
 #                   ('iid', 'color')]
+
+BATCH_FEATURES = ['iid', 'size', 'color', 'mid']
+
+WITHIN_FEATURES = {
+    'iid': ['size', 'color'],
+    #'size': ['iid', 'mid'],
+    #'color': ['iid', 'mid']
+}
 
 def parse_options():
     parser = ArgumentParser(
@@ -35,7 +45,6 @@ def parse_options():
 
     args = parser.parse_args()
     return args
-
 
 def main():
     args = parse_options()
@@ -56,25 +65,29 @@ def main():
     train_test = train.iloc[:100, :]
 
     # 3) whole dataset aggregation
-    # 3a) S.iid etc
     for feat in GLOBAL_FEATURES:
+        break
         feat_join = feat if type(feat) is str else "_".join(feat)
-        feat_name = "S_{0}".format(feat_join)
 
-        p = train.groupby(feat).apply(trans_group_count)
-        train[feat_name] = p
+        name_S = "S_{0}".format(feat_join)
+        name_LLR = "LLR_{0}".format(feat_join)
 
-    # 3b) LLR.iid etc
-    for feat in GLOBAL_FEATURES:
-        feat_join = feat if type(feat) is str else "_".join(feat)
-        feat_name = "LLR_{0}".format(feat_join)
+        _group = train.groupby(feat)
 
-        train[feat_name] = train.groupby(feat).apply(
-            trans_llr, c1=c1, c2=c2)
+        p_S = _group.apply(trans_group_count)
+        p_LLR = _group.apply(trans_llr, c1=c1, c2=c2)
 
-    # 4) per batch summary statistics
+        train[name_S] = p_S
+        train[name_LLR] = p_LLR
 
+    # 4) per batch summary statistics and ...
     # 5) features within substructures of batch
+
+    batches = train.groupby('batch')
+    bat_feats = batches.apply(
+        batch_summarize, u_feats=BATCH_FEATURES, wi_feats=WITHIN_FEATURES)
+
+    print(bat_feats.head(n=50))
 
 if __name__ == "__main__":
     main()
