@@ -111,6 +111,7 @@ def main():
         #hist_feats = train[cols].apply(
         #    sequential_counter, counter=hist_row_cnts, axis=1)
 
+        batch_counter.skip_test_drive = True
         batch_hist_feats = batches.apply(
             batch_counter, order_cnts=hist_batch_cnts, 
             rt_cnts=hist_batch_returns, columns=cols)

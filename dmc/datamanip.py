@@ -23,7 +23,7 @@ def batch_counter(df, order_cnts, rt_cnts, columns):
     # returned value is mutated, which tampers with the counts. 
     # hence we use a "static" variable to skip counting when this function is
     # called for the first time.
-    if batch_counter.skip_test_drive:
+    if not batch_counter.skip_test_drive:
         for feat, crt, cord in zip(
                 groups.groups.keys(), feat_return, feat_order):
             order_cnts[feat] += cord
