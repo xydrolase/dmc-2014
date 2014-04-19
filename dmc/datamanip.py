@@ -16,15 +16,24 @@ def batch_counter(df, order_cnts, rt_cnts, columns):
     feat_return = groups['return'].agg(sum)
     feat_order = groups.size()
 
-     
     ordered_times = pd.DataFrame([(rt_cnts[x], order_cnts[x]) 
                      for x in df[columns].itertuples(index=False)], index=df.index)
 
-    for feat, crt, cord in zip(groups.groups.keys(), feat_return, feat_order):
-        order_cnts[feat] += cord
-        rt_cnts[feat] += crt
+    # pandas will apply this function onto the first group to test whether the 
+    # returned value is mutated, which tampers with the counts. 
+    # hence we use a "static" variable to skip counting when this function is
+    # called for the first time.
+    if batch_counter.skip_test_drive:
+        for feat, crt, cord in zip(
+                groups.groups.keys(), feat_return, feat_order):
+            order_cnts[feat] += cord
+            rt_cnts[feat] += crt
+
+    batch_counter.skip_test_drive = False
 
     return ordered_times
+
+batch_counter.skip_test_drive = True
 
 def sequential_counter(row, counter):
     ntuple = tuple(row)

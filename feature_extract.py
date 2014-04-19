@@ -9,7 +9,7 @@ Author: Xin Yin <xinyin at iastate dot edu>
 """
 
 from collections import defaultdict, Counter
-from itertools import combinations, izip 
+from itertools import combinations
 from argparse import ArgumentParser 
 
 from dmc.datamanip import * 
