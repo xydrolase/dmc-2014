@@ -6,7 +6,16 @@ from math import log
 import numpy as np
 import pandas as pd
 
-# TODO: to write a broadcast decorator 
+def index_mapping(func):
+    """A decorator that wraps an iterable return from a function
+    into a DataFrame object, while mirroring the original index."""
+
+    def cast_to_dataframe(*args, **kwargs):
+        _iterable = func(*args, **kwargs)
+        # index mirroring
+        return pd.DataFrame(_iterable, index=args[0].index)
+
+    return cast_to_dataframe
 
 def feature_name(feats, sep='_'):
     return feats if type(feats) is str else sep.join(feats)
@@ -42,19 +51,21 @@ def sequential_counter(row, counter):
 
     return (n > 0, n)
 
+@index_mapping
 def trans_unique_count(x):
-    return pd.Series(np.repeat(len(set(x)), len(x)), index=x.index)
+    return np.repeat(len(set(x)), len(x))
 
+@index_mapping
 def trans_group_count(x):
     # IMPORTANT: Preserving original index
-    return pd.Series(np.repeat(len(x), len(x)), index=x.index)
+    return np.repeat(len(x), len(x))
 
+@index_mapping
 def trans_llr(x, c1, c2):
     R = float(np.sum(x['return']))
     NR = len(x) - R
     
-    return pd.Series(np.repeat(log((R + c1) / (NR + c2)), len(x)), 
-                     index=x.index)
+    return np.repeat(log((R + c1) / (NR + c2)), len(x))
 
 def batch_summarize(bat_df, u_feats, wi_feats):
     # a) per batch features: U.iid, U.size ...
