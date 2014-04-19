@@ -12,12 +12,13 @@ def feature_name(feats, sep='_'):
     return feats if type(feats) is str else sep.join(feats)
 
 def batch_counter(df, order_cnts, rt_cnts, columns):
-    groups = df.groupby(columns)
+    groups = df.groupby(columns, sort=False)
     feat_return = groups['return'].agg(sum)
     feat_order = groups.size()
 
+     
     ordered_times = pd.DataFrame([(rt_cnts[x], order_cnts[x]) 
-                     for x in df[columns].itertuples()], index=df.index)
+                     for x in df[columns].itertuples(index=False)], index=df.index)
 
     for feat, crt, cord in zip(groups.groups.keys(), feat_return, feat_order):
         order_cnts[feat] += cord
