@@ -25,8 +25,20 @@ def main():
             sub_df[['iid', 'return']].itertuples(index=False), 2))
 
         for (iid1, ret1), (iid2, ret2) in all_pairs:
-            if ret1 == 0:
-                count_matrices[ret2][iidmap[iid1], iidmap[iid2]] += 1
+            if ret1 * ret2 == 1: 
+                continue
+
+            matidx = ret1 + ret2
+            if matidx == 0:
+                # symmetric kept-kept / kept-return relationship.
+                count_matrices[0][iidmap[iid1], iidmap[iid2]] += 1
+                count_matrices[0][iidmap[iid2], iidmap[iid1]] += 1
+            else:
+                if ret1 == 0:
+                    count_matrices[1][iidmap[iid1], iidmap[iid2]] += 1
+                else:
+                    count_matrices[1][iidmap[iid2], iidmap[iid1]] += 1
+
 
     np.savetxt("keptkept.csv", count_matrices[0], fmt='%d', delimiter=",")
     np.savetxt("keptret.csv", count_matrices[1], fmt='%d', delimiter=",")
