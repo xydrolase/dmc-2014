@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# -*- coding: utf-8
 
 from __future__ import print_function, division
 
@@ -20,45 +21,86 @@ import logging
 import pandas as pd
 import numpy as np
 
-### Some options, later will be moved into ArgumentParser
-#GLOBAL_FEATURES = ['iid']
-GLOBAL_FEATURES = ['mid', 'iid', 'size', 'color', ('iid', 'size'), 
-                   ('iid', 'color')]
+def create_logger():
+    logger = logging.getLogger('feat_extract')
+    logger.setLevel(logging.INFO)
 
-BATCH_FEATURES = ['iid', 'size', 'color', 'mid']
+    # create console handler and set level to debug
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.INFO)
 
-WITHIN_FEATURES = {
-    'iid': ['size', 'color'],
-    'size': ['iid', 'mid'],
-    'color': ['iid', 'mid']
-}
+    # create formatter
+    formatter = logging.Formatter('%(asctime)s [%(levelname)s] - %(message)s')
 
-#HISTORICAL_FEATURES = ['iid']
-HISTORICAL_FEATURES = ['iid', 'size', 'color', 
-                       ('iid', 'size'), ('iid', 'color')]
+    # add formatter to ch
+    ch.setFormatter(formatter)
+
+    # add ch to logger
+    logger.addHandler(ch)
+
+    return logger
 
 def parse_options():
     parser = ArgumentParser(
         description="DMC2014 feature matrix extraction script.")
 
-    parser.add_argument("--c1c2", type=float, default=[1.0, 1.0], nargs=2,
+    parser.add_argument("--feat-matrix-only", default=False, 
+                        action="store_true", 
+                        help="Output only the feature matrix "\
+                        "(sans original columns)")
+    parser.add_argument("--c1c2", type=float, default=[0.5, 0.5], nargs=2,
                         metavar='NUM',
                         help="Constants c1 c2 used in computing LLR")
+    parser.add_argument("--global-features", 
+                        default="mid,iid,size,color,iid:size,iid:color",
+                        help="Features to be extracted from the entire " \
+                        "dataset. Separate different features by comma.")
+    parser.add_argument("--batch-features", 
+                        default="iid,size,color,mid",
+                        help="Features extracted at per batch level.")
+    parser.add_argument("--within-features",
+                        default="iid|size,iid|color,size|iid,size|mid," \
+                        "color|iid,color|mid",
+                        help="Features to be extracted within substructures "\
+                        "within batches. Use 'within_feat|feat' to specify "\
+                        "nested structure.")
     parser.add_argument("data_matrix", 
                         help="Path to the (cleaned) input data matrix")
+    parser.add_argument("class_ind",
+                        help="Learning/validation set indicators.")
 
     args = parser.parse_args()
+
+    # process features
+    args.global_features = [feat if feat.find(":") == -1 else feat.split(":")
+                            for feat in args.global_features.split(',')]
+    args.batch_features = [feat if feat.find(":") == -1 else feat.split(":")
+                           for feat in args.batch_features.split(',')]
+
+    _within_feats = defaultdict(list)
+    for wifeat, feat in [feat.split('|')
+                         for feat in args.within_features.split(',')]:
+        _within_feats[wifeat].append(feat)
+
+    args.within_features = _within_feats
+    
     return args
 
 def main():
     args = parse_options()
+    logger = create_logger()
 
     c1, c2 = args.c1c2
 
     # 1) data loading
     assert os.path.exists(args.data_matrix)
+    assert os.path.exists(args.class_ind)
+
+    logger.info("Loading datasets...")
+    cind = pd.read_csv(args.class_ind, sep=',')
     train = pd.read_csv(args.data_matrix, sep=',')
 
+    logger.info("Splitting purchases into batches...")
     # 2) split rows/orders into batches by identifying consecutive customer IDs
     # (cid).
     cid_edge = np.concatenate(
@@ -66,31 +108,88 @@ def main():
     cid_edge[cid_edge != 0] = 1
     train['batch'] = np.cumsum(cid_edge)
 
-    # for test only
-    #train = train.iloc[:1000, :]
+    train = pd.concat([train, cind], axis=1)
+    
+    # remove all data with deldate == NA
+    train = train[~np.isnan(train['deldate'])]
 
-    # 3) whole dataset aggregation
-    for feat in GLOBAL_FEATURES:
-        feat_join = feat if type(feat) is str else "_".join(feat)
+    # leaking protection
+    train[train['valid'] == 1]['return'] = np.NAN
 
-        name_S = "all.count.{0}".format(feature_name(feat))
-        name_LLR = "all.llr.{0}".format(feature_name(feat))
+    # rows on which features are created.
+    learn_idx = train['valid'] == 0
+    tr_cr = train[learn_idx]
+    tr_va = train[~learn_idx]
 
-        _group = train.groupby(feat, sort=False)
+    # 3) per batch summary statistics and ...
+    # 4) features within substructures of batch
+    # NOTE: these features are independent of training/validation, thus 
+    # can be aggregated first.
+    #batches = train.groupby('batch', sort=False)
+    #bat_feats = batches.apply(
+    #    batch_summarize, 
+    #    u_feats=args.batch_features,
+    #    wi_feats=args.within_features)
 
-        p_S = _group.apply(trans_group_count)
-        p_LLR = _group.apply(trans_llr, c1=c1, c2=c2)
+    glob_feat_list = []
+    # 5) whole dataset aggregation
+    for feat in args.global_features:
+        break
+        # counts in the learning set
+        learn_counts = tr_cr.groupby(feat, sort=False).size()
+        learn_returns = tr_cr[tr_cr['return'] == 1].groupby(
+            feat, sort=False)['return'].agg(np.sum)
 
-        train[name_S] = p_S
-        train[name_LLR] = p_LLR
+        x = batches.apply(
+            extract_global_features, 
+            feat=feat, counts=learn_counts, returns=learn_returns,
+            c1=c1, c2=c2)
 
-    # 4) per batch summary statistics and ...
-    # 5) features within substructures of batch
-    batches = train.groupby('batch', sort=False)
-    bat_feats = batches.apply(
-        batch_summarize, u_feats=BATCH_FEATURES, wi_feats=WITHIN_FEATURES)
+        x.columns = ["all.count.{0}".format(feature_name(feat)),
 
-    # 6) historical features
+                     "all.llr.{0}".format(feature_name(feat))]
+
+        glob_feat_list.append(x)
+
+    # 6) average batch size for each cid
+
+    # compute historical customer batch features for the learning set 
+    logger.info("Summarizing batch related features for customers...")
+    cid_ln_feats = tr_cr.groupby('cid', sort=False).apply(cid_batch_summarize)
+    logger.info("Indexing customer/batch features...")
+    cid_agg = pd.concat([pd.DataFrame(tr_cr['cid']), cid_ln_feats], axis=1).groupby('cid').apply(
+        lambda x: x.iloc[0, :])
+    # convert cid_agg into a dictionary for lookups
+    cid_bat_dict = dict([(r[0], r) 
+                         for r in cid_agg.itertuples(index=False)])
+
+    # releasing memory
+    del cid_agg
+
+    # now for validation set
+    cid_va_feats = tr_va['cid'].apply(
+        lambda cid: pd.Series(cid_bat_dict.get(
+            cid, # if it is a new customer, we don't have hist data
+            (cid, np.NAN, np.NAN, np.NAN, np.NAN, np.NAN, np.NAN))
+    ))
+
+    # release memory
+    del cid_bat_dict
+
+    # combine the two parts
+    cid_feats = pd.DataFrame(
+        np.zeros((train.shape[0], cid_ln_feats.shape[1])),
+        columns =cid_ln_feats.columns
+    )
+
+    cid_feats[learn_idx] = cid_ln_feats.iloc[:, ]
+    cid_feats[~learn_idx] = cid_va_feats.iloc[:, 1:]
+
+    # deleting intermediate data frames
+    del cid_ln_feats
+    del cid_va_feats
+
+    # 7) other customer historical features
     #    number of times an item had been purchased by customer
     #    number of batches an item had been purchased by customer
     #    number of times returned
@@ -117,8 +216,9 @@ def main():
             rt_cnts=hist_batch_returns, columns=cols)
 
         batch_hist_feats.columns = [
+            'bhist.retcnt.{0}'.format(feature_name(feat)),
             'bhist.purcnt.{0}'.format(feature_name(feat)),
-            'bhist.retcnt.{0}'.format(feature_name(feat))]
+            'bhist.llr.{0}'.format(feature_name(feat))]
 
         hist_feat_list.append(batch_hist_feats)
 
