@@ -71,12 +71,18 @@ def trans_llr(x, c1, c2):
     return np.repeat(log((R + c1) / (NR + c2)), len(x))
 
 def extract_global_features(bat, feat, counts, returns, c1, c2):
+    """Extract history purchase counts and return likelihood ratios for selected
+    features. These features are not aggregated across all customers."""
+
     gbf = bat.groupby(feat, sort=False)
 
     mul = 1
     if np.all(bat['valid']):
         # for validation set, use only the counts/LLRs from the learning set.
         mul = 0
+
+    bcnts = gbf.size()
+    brets = gbf['return'].agg(sum)
     
     # counts
     col_cnts = np.concatenate([
@@ -97,11 +103,14 @@ def cid_batch_summarize(df):
     batches = df.groupby('batch', sort=False)
     bsize = batches.size()
     breturn = batches['return'].agg(sum)
+    #bdate = batches['date'].agg(lambda x: x[0])
     bkept = bsize - breturn
 
     avg_bsize = np.mean(bsize)
     sum_kept_rate = np.sum(bkept / bsize)
     sum_ret_rate = np.sum(breturn / bsize)
+
+    #bdate_diff = np.concatenate([[np.nan], bdate[1:] - bdate[:-1]])
 
     n = len(df)
     nbatch = len(bsize)
@@ -109,6 +118,8 @@ def cid_batch_summarize(df):
     # average batch size / avg & sum kept rate / 
     # / avg & sum returned rate / rate ratio
     ret_df = pd.DataFrame({
+        # repeat each date.diff accordingly
+        #'cid.diff.date': np.repeat(bdate_diff, bsize),
         'cid.avg.bsize': np.repeat(avg_bsize, n),
         'cid.sum.krate': np.repeat(sum_kept_rate, n),
         'cid.avg.krate': np.repeat(sum_kept_rate / nbatch, n),
@@ -133,7 +144,6 @@ def batch_summarize(bat_df, u_feats, wi_feats):
 
     # b) within feature features: WIiid.size ...
     for wi_feat, agg_feats in wi_feats.items():
-        break
         _group = bat_df.groupby(wi_feat, sort=False)
 
         for _feat in agg_feats:

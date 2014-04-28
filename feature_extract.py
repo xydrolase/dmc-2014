@@ -100,6 +100,15 @@ def main():
     cind = pd.read_csv(args.class_ind, sep=',')
     train = pd.read_csv(args.data_matrix, sep=',')
 
+    train = pd.concat([train, cind], axis=1)
+
+    logger.info("Data cleaning...")
+    # remove all data with deldate == NA
+    train = train.drop(train.index[np.isnan(train['deldate'])])
+
+    # make new index consecutive
+    train.reindex()
+
     logger.info("Splitting purchases into batches...")
     # 2) split rows/orders into batches by identifying consecutive customer IDs
     # (cid).
@@ -108,13 +117,8 @@ def main():
     cid_edge[cid_edge != 0] = 1
     train['batch'] = np.cumsum(cid_edge)
 
-    train = pd.concat([train, cind], axis=1)
-    
-    # remove all data with deldate == NA
-    train = train[~np.isnan(train['deldate'])]
-
     # leaking protection
-    train[train['valid'] == 1]['return'] = np.NAN
+    train.ix[train['valid'] == 1, 'return'] = np.NAN
 
     # rows on which features are created.
     learn_idx = train['valid'] == 0
@@ -125,16 +129,20 @@ def main():
     # 4) features within substructures of batch
     # NOTE: these features are independent of training/validation, thus 
     # can be aggregated first.
-    #batches = train.groupby('batch', sort=False)
-    #bat_feats = batches.apply(
-    #    batch_summarize, 
-    #    u_feats=args.batch_features,
-    #    wi_feats=args.within_features)
+    logger.info("Generating per batch and with batch features...")
 
+    batches = train.groupby('batch', sort=False)
+    bat_feats = batches.apply(
+        batch_summarize, 
+        u_feats=args.batch_features,
+        wi_feats=args.within_features)
+
+    logger.info("Generating global features...")
     glob_feat_list = []
     # 5) whole dataset aggregation
     for feat in args.global_features:
-        break
+        logger.info("  >> Columns: {0}".format(feature_name(feat)))
+
         # counts in the learning set
         learn_counts = tr_cr.groupby(feat, sort=False).size()
         learn_returns = tr_cr[tr_cr['return'] == 1].groupby(
@@ -170,7 +178,7 @@ def main():
     cid_va_feats = tr_va['cid'].apply(
         lambda cid: pd.Series(cid_bat_dict.get(
             cid, # if it is a new customer, we don't have hist data
-            (cid, np.NAN, np.NAN, np.NAN, np.NAN, np.NAN, np.NAN))
+            (cid, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan))
     ))
 
     # release memory
@@ -182,7 +190,7 @@ def main():
         columns =cid_ln_feats.columns
     )
 
-    cid_feats[learn_idx] = cid_ln_feats.iloc[:, ]
+    cid_feats[learn_idx] = cid_ln_feats
     cid_feats[~learn_idx] = cid_va_feats.iloc[:, 1:]
 
     # deleting intermediate data frames
@@ -196,34 +204,35 @@ def main():
     #    had been purchased?
     #    had been returned?
     hist_feat_list = []
-    for feat in HISTORICAL_FEATURES:
-        hist_row_cnts = defaultdict(int)
-        hist_batch_cnts = defaultdict(int)
-        hist_batch_returns = defaultdict(int)
+    #for feat in HISTORICAL_FEATURES:
+    #    hist_row_cnts = defaultdict(int)
+    #    hist_batch_cnts = defaultdict(int)
+    #    hist_batch_returns = defaultdict(int)
 
-        cols = ['cid']
-        if type(feat) in (tuple, list):
-            cols.extend(feat)
-        elif type(feat) is str:
-            cols.append(feat)
+    #    cols = ['cid']
+    #    if type(feat) in (tuple, list):
+    #        cols.extend(feat)
+    #    elif type(feat) is str:
+    #        cols.append(feat)
 
-        #hist_feats = train[cols].apply(
-        #    sequential_counter, counter=hist_row_cnts, axis=1)
+    #    #hist_feats = train[cols].apply(
+    #    #    sequential_counter, counter=hist_row_cnts, axis=1)
 
-        batch_counter.skip_test_drive = True
-        batch_hist_feats = batches.apply(
-            batch_counter, order_cnts=hist_batch_cnts, 
-            rt_cnts=hist_batch_returns, columns=cols)
+    #    batch_counter.skip_test_drive = True
+    #    batch_hist_feats = batches.apply(
+    #        batch_counter, order_cnts=hist_batch_cnts, 
+    #        rt_cnts=hist_batch_returns, columns=cols)
 
-        batch_hist_feats.columns = [
-            'bhist.retcnt.{0}'.format(feature_name(feat)),
-            'bhist.purcnt.{0}'.format(feature_name(feat)),
-            'bhist.llr.{0}'.format(feature_name(feat))]
+    #    batch_hist_feats.columns = [
+    #        'bhist.retcnt.{0}'.format(feature_name(feat)),
+    #        'bhist.purcnt.{0}'.format(feature_name(feat)),
+    #        'bhist.llr.{0}'.format(feature_name(feat))]
 
-        hist_feat_list.append(batch_hist_feats)
+    #    hist_feat_list.append(batch_hist_feats)
 
     # concatenate features and dump
-    feat_mat = pd.concat([train, bat_feats] + hist_feat_list, axis=1)
+    feat_mat = pd.concat([train, bat_feats, cid_feats] + \
+                         glob_feat_list + hist_feat_list, axis=1)
     feat_mat.to_csv("out.csv", index=False)
 
 if __name__ == "__main__":
