@@ -73,35 +73,15 @@ def trans_llr(x, c1, c2):
 def extract_global_features(bat, feat, counts, returns, c1, c2):
     """Extract history purchase counts and return likelihood ratios for selected
     features. These features are not aggregated across all customers."""
-
-    gbf = bat.groupby(feat, sort=False)
-
-    #mul = 1
-
-    # 04/30: as per discussion with Fan and Cory: to subtract the information
-    # from current batch makes the feature perfectly correlated with the 
-    # return, which should be removed.
-    # Setting mul = 0 is a quick fix, although might not be very efficient.
-
-    mul = 0
-    if np.all(bat['valid']):
-        # for validation set, use only the counts/LLRs from the learning set.
-        mul = 0
-
     bcnts = gbf.size()
     brets = gbf['return'].agg(sum)
-    
-    # counts
-    col_cnts = np.concatenate([
-        np.repeat(counts.get(k, 0) - v * mul, v)
-        for k, v in bcnts.items()])
-    col_rets = np.concatenate([
-        np.repeat(returns.get(k, 0) - v * mul, bcnts[k])
-        for k, v in brets.items()])
+
+    feat_tuples = bat[feat].itertuples(index=False)
+    col_cnts = [counts.get(ft, 0) for ft in feat_tuples]
+    col_rets = [returns.get(ft, 0) for ft in feat_tuples]
 
     # LLRs
     col_llrs = np.log((col_rets + c1) / (col_cnts - col_rets + c2))
-
     return pd.DataFrame({'x': col_cnts, 'y': col_llrs}, index=bat.index)
 
 def cid_batch_summarize(df):
