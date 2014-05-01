@@ -48,15 +48,17 @@ def parse_options():
                         action="store_true", 
                         help="Output only the feature matrix "\
                         "(sans original columns)")
-    parser.add_argument("--c1c2", type=float, default=[0.5, 0.5], nargs=2,
+    parser.add_argument("--c1c2", type=float, default=[1.0, 1.0], nargs=2,
                         metavar='NUM',
                         help="Constants c1 c2 used in computing LLR")
     parser.add_argument("--global-features", 
-                        default="mid,iid,size,color,iid:size,iid:color",
+                        default="state,state:mid,mid,iid,size,color,"\
+                        "iid:size,iid:color,mid:size,mid:color,"\
+                        "zsize,ztype,mid:zsize,iid:zsize,cid,cid:zsize",
                         help="Features to be extracted from the entire " \
                         "dataset. Separate different features by comma.")
     parser.add_argument("--batch-features", 
-                        default="iid,size,color,mid",
+                        default="iid,size,color,mid,zsize,ztype",
                         help="Features extracted at per batch level.")
     parser.add_argument("--within-features",
                         default="iid|size,iid|color,size|iid,size|mid," \
@@ -135,6 +137,7 @@ def main():
     logger.info("Generating per batch and with batch features...")
 
     batches = train.groupby('batch', sort=False)
+
     bat_feats = batches.apply(
         batch_summarize, 
         u_feats=args.batch_features,
@@ -178,6 +181,7 @@ def main():
     del cid_agg
 
     # now for validation set
+    logger.info("Batch/customer related features for validation set...")
     cid_va_feats = tr_va['cid'].apply(
         lambda cid: pd.Series(cid_bat_dict.get(
             cid, # if it is a new customer, we don't have hist data
@@ -200,7 +204,15 @@ def main():
     del cid_ln_feats
     del cid_va_feats
 
-    # 7) other customer historical features
+    # 7) interval between purchases
+    logger.info("Computing intervals between customer purchases...")
+    batch_interval.first_invoked = True
+    hist_pur_dict = {'iid': {}, 'mid': {}, 'size': {}, 'color': {}}
+    intvl_feats = batches.apply(batch_interval, hist_dict=hist_pur_dict)
+
+    del hist_pur_dict
+
+    # 8) other customer historical features
     #    number of times an item had been purchased by customer
     #    number of batches an item had been purchased by customer
     #    number of times returned
@@ -234,7 +246,7 @@ def main():
     #    hist_feat_list.append(batch_hist_feats)
 
     # concatenate features and dump
-    feat_mat = pd.concat([train, bat_feats, cid_feats] + \
+    feat_mat = pd.concat([train, bat_feats, cid_feats, intvl_feats] + \
                          glob_feat_list + hist_feat_list, axis=1)
     feat_mat.to_csv("out.csv", index=False)
 

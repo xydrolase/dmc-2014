@@ -76,7 +76,14 @@ def extract_global_features(bat, feat, counts, returns, c1, c2):
 
     gbf = bat.groupby(feat, sort=False)
 
-    mul = 1
+    #mul = 1
+
+    # 04/30: as per discussion with Fan and Cory: to subtract the information
+    # from current batch makes the feature perfectly correlated with the 
+    # return, which should be removed.
+    # Setting mul = 0 is a quick fix, although might not be very efficient.
+
+    mul = 0
     if np.all(bat['valid']):
         # for validation set, use only the counts/LLRs from the learning set.
         mul = 0
@@ -131,6 +138,33 @@ def cid_batch_summarize(df):
         index=df.index)
 
     return ret_df
+
+def batch_interval(bat_df, hist_dict):
+    if batch_interval.first_invoked:
+        batch_interval.first_invoked = False
+        return
+
+    feats = ('mid', 'iid', 'size', 'color')
+    ret_ar = np.zeros((len(bat_df), len(feats)))
+    
+    for colidx, feat in enumerate(feats):
+        fdict = hist_dict[feat]
+
+        items = bat_df[['cid', feat, 'date']].itertuples(index=False)
+        cfeats = np.array([(item[:2], fdict.get(item[:2], np.nan), item[2])
+                  for item in items])
+
+        intvl = cfeats[:, 2] - cfeats[:, 1]
+
+        # update date
+        for cf in cfeats:
+            fdict[cf[0]] = cf[2]
+            ret_ar[:, colidx] = intvl
+
+    return pd.DataFrame(ret_ar,
+                        columns=['bint.date.' + f for f in feats],
+                        index=bat_df.index)
+
 
 def batch_summarize(bat_df, u_feats, wi_feats):
     # a) per batch features: U.iid, U.size ...
