@@ -282,7 +282,7 @@ def main():
     train.ix[train['valid'] == 1, 'return'] = ret_valid
 
     # concatenate features and dump
-    blob_to_dump = [train] if not arg.feat_matrix_only else []
+    blob_to_dump = [train] if not args.feat_matrix_only else []
 
     if args.batch_features:
         blob_to_dump.append(bat_feats)
