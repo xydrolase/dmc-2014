@@ -73,16 +73,17 @@ def trans_llr(x, c1, c2):
 def extract_global_features(bat, feat, counts, returns, c1, c2):
     """Extract history purchase counts and return likelihood ratios for selected
     features. These features are not aggregated across all customers."""
-    bcnts = gbf.size()
-    brets = gbf['return'].agg(sum)
+    feat_tuples = bat[feat] \
+            if type(feat) is str else bat[feat].itertuples(index=False)
 
-    feat_tuples = bat[feat].itertuples(index=False)
-    col_cnts = [counts.get(ft, 0) for ft in feat_tuples]
-    col_rets = [returns.get(ft, 0) for ft in feat_tuples]
+    cnts_rets = np.array([(counts.get(ft, 0), returns.get(ft, 0))
+                 for ft in feat_tuples])
 
     # LLRs
-    col_llrs = np.log((col_rets + c1) / (col_cnts - col_rets + c2))
-    return pd.DataFrame({'x': col_cnts, 'y': col_llrs}, index=bat.index)
+    col_llrs = np.log((cnts_rets[:, 1] + c1) / \
+                      (cnts_rets[:, 0] - cnts_rets[:, 1] + c2))
+    return pd.DataFrame({'x': cnts_rets[:, 1], 'y': col_llrs}, 
+                        index=bat.index)
 
 def cid_batch_summarize(df):
     """Summarizing batch related features for each customer."""
