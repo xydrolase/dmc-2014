@@ -44,6 +44,8 @@ def parse_options():
     parser = ArgumentParser(
         description="DMC2014 feature matrix extraction script.")
 
+    parser.add_argument("-o", dest="output_file", default="out.csv",
+                        help="File to which results will be dumped.")
     parser.add_argument("--feat-matrix-only", default=False, 
                         action="store_true", 
                         help="Output only the feature matrix "\
@@ -51,10 +53,17 @@ def parse_options():
     parser.add_argument("--c1c2", type=float, default=[1.0, 1.0], nargs=2,
                         metavar='NUM',
                         help="Constants c1 c2 used in computing LLR")
+    parser.add_argument("--skip-cid-features", default=False,
+                        action="store_true",
+                        help="Do not generate all customer related features.")
+    parser.add_argument("--skip-intervals", default=False,
+                        action="store_true", 
+                        help="Do not compute purchase interval features.")
     parser.add_argument("--global-features", 
-                        default="state,state:mid,mid,iid,size,color,"\
-                        "iid:size,iid:color,mid:size,mid:color,"\
-                        "zsize,ztype,mid:zsize,iid:zsize,cid,cid:zsize",
+                        default="state,state:mid,state:iid,mid,iid,size,"\
+                        "color,iid:size,iid:color,mid:size,mid:color,"\
+                        "zsize,ztype,mid:zsize,iid:zsize,cid,cid:zsize,"\
+                        "cid:ztype,cid:zsize:ztype",
                         help="Features to be extracted from the entire " \
                         "dataset. Separate different features by comma.")
     parser.add_argument("--batch-features", 
@@ -74,17 +83,29 @@ def parse_options():
     args = parser.parse_args()
 
     # process features
-    args.global_features = [feat if feat.find(":") == -1 else feat.split(":")
-                            for feat in args.global_features.split(',')]
-    args.batch_features = [feat if feat.find(":") == -1 else feat.split(":")
-                           for feat in args.batch_features.split(',')]
+    if not args.global_features:
+        args.global_features = []
+    else :
+        args.global_features = [
+            feat if feat.find(":") == -1 else feat.split(":")
+            for feat in args.global_features.split(',')]
 
-    _within_feats = defaultdict(list)
-    for wifeat, feat in [feat.split('|')
-                         for feat in args.within_features.split(',')]:
-        _within_feats[wifeat].append(feat)
+    if not args.batch_features:
+        args.batch_features = []
+    else:
+        args.batch_features = [
+            feat if feat.find(":") == -1 else feat.split(":")
+            for feat in args.batch_features.split(',')]
 
-    args.within_features = _within_feats
+    if not args.within_features:
+        args.within_features = {}
+    else:
+        _within_feats = defaultdict(list)
+        for wifeat, feat in [feat.split('|')
+                             for feat in args.within_features.split(',')]:
+            _within_feats[wifeat].append(feat)
+
+        args.within_features = _within_feats
     
     return args
 
@@ -123,6 +144,7 @@ def main():
     train['batch'] = np.cumsum(cid_edge)
 
     # leaking protection
+    ret_valid = list(train.ix[train['valid'] == 1, 'return'])
     train.ix[train['valid'] == 1, 'return'] = np.NAN
 
     # rows on which features are created.
@@ -134,14 +156,17 @@ def main():
     # 4) features within substructures of batch
     # NOTE: these features are independent of training/validation, thus 
     # can be aggregated first.
-    logger.info("Generating per batch and with batch features...")
 
     batches = train.groupby('batch', sort=False)
-
-    bat_feats = batches.apply(
-        batch_summarize, 
-        u_feats=args.batch_features,
-        wi_feats=args.within_features)
+    bat_feats = None
+    if args.batch_features or args.within_features:
+        logger.info("Generating per batch and within batch features...")
+        bat_feats = batches.apply(
+            batch_summarize, 
+            u_feats=args.batch_features,
+            wi_feats=args.within_features)
+    else:
+        logger.info(":: Skipping per batch and within batch features...")
 
     logger.info("Generating global features...")
     glob_feat_list = []
@@ -166,51 +191,59 @@ def main():
         glob_feat_list.append(x)
 
     # 6) average batch size for each cid
+    cid_feats = None
+    if not args.skip_cid_features:
+        # compute historical customer batch features for the learning set 
+        logger.info("Summarizing batch related features for customers...")
+        cid_ln_feats = tr_cr.groupby('cid', sort=False).apply(
+            cid_batch_summarize)
+        logger.info("Indexing customer/batch features...")
+        cid_agg = pd.concat([pd.DataFrame(tr_cr['cid']), cid_ln_feats], 
+                            axis=1).groupby('cid').apply(
+                                lambda x: x.iloc[0, :])
+        # convert cid_agg into a dictionary for lookups
+        cid_bat_dict = dict([(r[0], r) 
+                             for r in cid_agg.itertuples(index=False)])
 
-    # compute historical customer batch features for the learning set 
-    logger.info("Summarizing batch related features for customers...")
-    cid_ln_feats = tr_cr.groupby('cid', sort=False).apply(cid_batch_summarize)
-    logger.info("Indexing customer/batch features...")
-    cid_agg = pd.concat([pd.DataFrame(tr_cr['cid']), cid_ln_feats], axis=1).groupby('cid').apply(
-        lambda x: x.iloc[0, :])
-    # convert cid_agg into a dictionary for lookups
-    cid_bat_dict = dict([(r[0], r) 
-                         for r in cid_agg.itertuples(index=False)])
+        # releasing memory
+        del cid_agg
 
-    # releasing memory
-    del cid_agg
+        # now for validation set
+        logger.info("Batch/customer related features for validation set...")
+        cid_va_feats = tr_va['cid'].apply(
+            lambda cid: pd.Series(cid_bat_dict.get(
+                cid, # if it is a new customer, we don't have hist data
+                (cid, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan))
+        ))
 
-    # now for validation set
-    logger.info("Batch/customer related features for validation set...")
-    cid_va_feats = tr_va['cid'].apply(
-        lambda cid: pd.Series(cid_bat_dict.get(
-            cid, # if it is a new customer, we don't have hist data
-            (cid, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan))
-    ))
+        # release memory
+        del cid_bat_dict
 
-    # release memory
-    del cid_bat_dict
+        # combine the two parts
+        cid_feats = pd.DataFrame(
+            np.zeros((train.shape[0], cid_ln_feats.shape[1])),
+            columns = cid_ln_feats.columns
+        )
 
-    # combine the two parts
-    cid_feats = pd.DataFrame(
-        np.zeros((train.shape[0], cid_ln_feats.shape[1])),
-        columns = cid_ln_feats.columns
-    )
+        cid_feats[learn_idx] = cid_ln_feats
+        cid_feats[~learn_idx] = cid_va_feats.iloc[:, 1:]
 
-    cid_feats[learn_idx] = cid_ln_feats
-    cid_feats[~learn_idx] = cid_va_feats.iloc[:, 1:]
-
-    # deleting intermediate data frames
-    del cid_ln_feats
-    del cid_va_feats
+        # deleting intermediate data frames
+        del cid_ln_feats
+        del cid_va_feats
+    else:
+        logger.info(":: Skipping customer related batch features...")
 
     # 7) interval between purchases
-    logger.info("Computing intervals between customer purchases...")
-    batch_interval.first_invoked = True
-    hist_pur_dict = {'iid': {}, 'mid': {}, 'size': {}, 'color': {}}
-    intvl_feats = batches.apply(batch_interval, hist_dict=hist_pur_dict)
+    if not args.skip_intervals:
+        logger.info("Computing intervals between customer purchases...")
+        batch_interval.first_invoked = True
+        hist_pur_dict = {'iid': {}, 'mid': {}, 'size': {}, 'color': {}}
+        intvl_feats = batches.apply(batch_interval, hist_dict=hist_pur_dict)
 
-    del hist_pur_dict
+        del hist_pur_dict
+    else:
+        logger.info(":: Skipping purchase interval features...")
 
     # 8) other customer historical features
     #    number of times an item had been purchased by customer
@@ -245,10 +278,26 @@ def main():
 
     #    hist_feat_list.append(batch_hist_feats)
 
+    # restore the return values for validation set
+    train.ix[train['valid'] == 1, 'return'] = ret_valid
+
     # concatenate features and dump
-    feat_mat = pd.concat([train, bat_feats, cid_feats, intvl_feats] + \
-                         glob_feat_list + hist_feat_list, axis=1)
-    feat_mat.to_csv("out.csv", index=False)
+    blob_to_dump = [train] if not arg.feat_matrix_only else []
+
+    if args.batch_features:
+        blob_to_dump.append(bat_feats)
+
+    if not args.skip_cid_features:
+        blob_to_dump.append(cid_feats)
+
+    if not args.skip_intervals:
+        blob_to_dump.append(intvl_feats)
+
+    blob_to_dump += glob_feat_list
+    blob_to_dump += hist_feat_list
+
+    feat_mat = pd.concat(blob_to_dump, axis=1)
+    feat_mat.to_csv(args.output_file, index=False)
 
 if __name__ == "__main__":
     main()
