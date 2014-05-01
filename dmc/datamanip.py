@@ -140,7 +140,7 @@ def batch_summarize(bat_df, u_feats, wi_feats):
     # aggregation of all per batch features
     u_values = [len(set(bat_df[feat])) for feat in u_feats]
 
-    data = zip(u_names, u_values)
+    data = list(zip(u_names, u_values))
 
     # b) within feature features: WIiid.size ...
     for wi_feat, agg_feats in wi_feats.items():

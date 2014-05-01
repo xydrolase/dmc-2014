@@ -104,10 +104,13 @@ def main():
 
     logger.info("Data cleaning...")
     # remove all data with deldate == NA
+
     train = train.drop(train.index[np.isnan(train['deldate'])])
+    #train = train[~np.isnan(train['deldate'])]
 
     # make new index consecutive
-    train.reindex()
+    #train.reset_index()
+    train.index = range(len(train))
 
     logger.info("Splitting purchases into batches...")
     # 2) split rows/orders into batches by identifying consecutive customer IDs
@@ -187,7 +190,7 @@ def main():
     # combine the two parts
     cid_feats = pd.DataFrame(
         np.zeros((train.shape[0], cid_ln_feats.shape[1])),
-        columns =cid_ln_feats.columns
+        columns = cid_ln_feats.columns
     )
 
     cid_feats[learn_idx] = cid_ln_feats
