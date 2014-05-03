@@ -82,7 +82,7 @@ def extract_global_features(bat, feat, counts, returns, c1, c2):
     # LLRs
     col_llrs = np.log((cnts_rets[:, 1] + c1) / \
                       (cnts_rets[:, 0] - cnts_rets[:, 1] + c2))
-    return pd.DataFrame({'x': cnts_rets[:, 1], 'y': col_llrs}, 
+    return pd.DataFrame({'x': cnts_rets[:, 0], 'y': col_llrs}, 
                         index=bat.index)
 
 def cid_batch_summarize(df):
