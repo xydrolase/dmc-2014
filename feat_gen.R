@@ -79,7 +79,7 @@ counts.and.llrs <- function(df, feats, c1=1.0, c2=1.0) {
     R <- (grp %.% mutate(returns=sum(return, na.rm=T)))$returns
 
     # per batch counts (which will be used to compute correction factor)
-    bat.grp <- do.call(group_by, c(list(df), list(c('batch', feats))))
+    bat.grp <- do.call(group_by, c(list(df), as.list(c('batch', feats))))
     k <- (bat.grp %.% mutate(counts=sum(!is.na(return))))$counts
 
     llr <- log((R + c1) / (N - R + c2))
