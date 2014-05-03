@@ -3,8 +3,8 @@
 
 library(dplyr)
 
+# original data
 load("~/Dropbox/DMC/Cory/dataclean/data_v1.Rdata")
-load("~/Dropbox/DMC/Fan/data_v3.2_R.Rdata")
 
 fv32 <- read.csv("~/projects/dmc14/data/featmatrix_v3.2.csv", header=T)
 bwi.bint.idx <- c(grep("bwi_", names(fv32)), grep("bint.", names(fv32)))
@@ -12,6 +12,7 @@ bwi.bint.feats <- fv32[, bwi.bint.idx]
 rm(fv32)
 
 # subset Fan's features
+load("~/Dropbox/DMC/Fan/data_v3.2_R.Rdata")
 fan.feats <- train[,27:78]
 
 # drop the full matrix loaded from Fan's Rdata file
@@ -71,7 +72,7 @@ raw.tr$pct.logpr <- round((log(pr) - log(min(pr))) /
 ## To compute counts and LLRs for given "feats", the combation of features.
 counts.and.llrs <- function(df, feats, c1=1.0, c2=1.0) {
     # use do.call to expand combination of features into arguments
-    grp <- do.call(group_by, c(list(df), list(feats)))
+    grp <- do.call(group_by, c(list(df), as.list(feats)))
 
     # overall counts and returns, sans validation set
     N <- (grp %.% mutate(counts=sum(!is.na(return))))$counts
@@ -120,8 +121,6 @@ for (i in 1:ncol(feats.2way)) {
     names(.feats) <- fnames
     all.feats <- cbind(all.feats, .feats)
 }
-
-names(all.feats)
 
 # ratio of low price / low discount
 fan.feats$rlowprice.by.cid <- fan.feats$nlowprice.by.cid / 
