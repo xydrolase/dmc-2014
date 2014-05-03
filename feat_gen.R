@@ -4,9 +4,25 @@
 library(dplyr)
 
 load("~/Dropbox/DMC/Cory/dataclean/data_v1.Rdata")
+load("~/Dropbox/DMC/Fan/data_v3.2_R.Rdata")
+
+fv32 <- read.csv("~/projects/dmc14/data/featmatrix_v3.2.csv", header=T)
+bwi.bint.idx <- c(grep("bwi_", names(fv32)), grep("bint.", names(fv32)))
+bwi.bint.feats <- fv32[, bwi.bint.idx]
+rm(fv32)
+
+# subset Fan's features
+fan.feats <- train[,27:78]
+
+# drop the full matrix loaded from Fan's Rdata file
+rm(train)
+
+# load Xiaoyue's numeric size feature and type
 zoe.size.type <- read.csv("~/projects/dmc14/data/tr_sizetype.csv", header=T)
 names(zoe.size.type) <- c('zsize', 'ztype')
-vs <- read.csv("~/Dropbox/DMC/Cory/validset/batchValidSet_v2.csv",
+
+# validation indicators
+vs <- read.csv("~/Dropbox/DMC/Cory/validset/oldfiles/batchValidSet_v2.csv",
                header=T)
 
 raw.tr <- cbind(tr, zoe.size.type, vs)
@@ -24,10 +40,33 @@ validset <- as.logical(raw.tr$valid)
 raw.tr$return[validset] <- NA
 
 # split into training and validation
-trt <- raw.tr[validset, ]
-trv <- raw.tr[!validset, ]
+#trt <- raw.tr[validset, ]
+#trv <- raw.tr[!validset, ]
 
 batches <- group_by(raw.tr, 'batch')
+
+## item freshness 
+raw.tr$f1w <- fan.feats$outday.by.iid <= 7
+raw.tr$f2w <- fan.feats$outday.by.iid <= 14
+raw.tr$f1m <- fan.feats$outday.by.iid <= 30
+raw.tr$f3m <- fan.feats$outday.by.iid <= 90
+raw.tr$f6m <- fan.feats$outday.by.iid <= 180
+raw.tr$oseas <- fan.feats$outseason.by.iid
+
+raw.tr$isdisc <- fan.feats$disc < 1
+raw.tr$deal <- fan.feats$deal
+raw.tr$lowdisc <- fan.feats$disc <= 0.8
+
+## price ranges
+raw.tr$pb25 <- raw.tr$price < 25
+raw.tr$pb50 <- raw.tr$price < 50
+raw.tr$pb100 <- raw.tr$price < 100
+raw.tr$pb200 <- raw.tr$price < 200
+
+pr <- raw.tr$price
+pr[pr == 0] <- 1 
+raw.tr$pct.logpr <- round((log(pr) - log(min(pr))) / 
+                   (log(max(pr)) - log(min(pr))) * 20)
 
 ## To compute counts and LLRs for given "feats", the combation of features.
 counts.and.llrs <- function(df, feats, c1=1.0, c2=1.0) {
@@ -50,7 +89,10 @@ counts.and.llrs <- function(df, feats, c1=1.0, c2=1.0) {
 
 ## historical features
 all.cols <- c("cid", "iid", "mid", "ztype", "zsize", "size", "color", 
-               "state", "month", "season", "dow")
+               "state", "month", "season", "dow", "f1w", "f2w", "f1m",
+               "f3m", "f6m", "oseas", "isdisc", "deal", "lowdisc",
+               "pb25", "pb50", "pb100", "pb200", "pct.logpr")
+
 feats.2way <- combn(all.cols, 2)
 
 all.feats <- NULL
@@ -80,6 +122,12 @@ for (i in 1:ncol(feats.2way)) {
 }
 
 names(all.feats)
+
+# ratio of low price / low discount
+fan.feats$rlowprice.by.cid <- fan.feats$nlowprice.by.cid / 
+        all.feats$all.cnt.cid
+fan.feats$rlowdisc.by.cid <- fan.feats$nlowdisc.by.cid /
+        all.feats$all.cnt.cid
 
 ## batch features
 bfeats <- batches %.% mutate(bat.n=length(oid), 
@@ -124,7 +172,10 @@ cb.avg.feats <- group_by(cb.ret.rates, cid) %.%
 cb.avg.feats$cid.llr.rk <- log((cb.avg.feats$cid.avg.rrate+1) /
                                (cb.avg.feats$cid.avg.krate+1))
 
-feat.mat <- cbind(raw.tr, all.feats, bfeats[, -1], cb.avg.feats[, -2])
+fan.feats <- fan.feats[, -which(names(fan.feats) == 'deal')]
+ftr <- cbind(raw.tr, all.feats, bfeats[, -1], cb.avg.feats[, -2],
+                  fan.feats, bwi.bint.feats)
 
 # output
-write.csv(feat.mat, file="featmatrix_v4_part1.csv", row.names=F)
+save(ftr, file="featmatrix_v4.Rdata")
+#write.csv(feat.mat, file="featmatrix_v5_part1.csv", row.names=F)
