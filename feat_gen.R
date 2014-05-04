@@ -14,12 +14,15 @@ rm(list = ls())
 library(reshape2)
 library(dplyr)
 
+## Set indices
+load("data/sets_v4.Rdata")
+
 # Import within batch features and batch interval features
 # generated previously with feature_extract.py (pandas)
 
 fv32 <- read.csv("data/out.csv", header=T)
-bwi.bint.idx <- c(grep("bwi_", names(fv32)), grep("bint.", names(fv32)))
-bwi.bint.feats <- fv32[, bwi.bint.idx]
+bint.idx <- c(grep("bint.", names(fv32)))
+bint.feats <- fv32[, bint.idx]
 rm(fv32)
 
 ####### Import Common data
@@ -457,6 +460,41 @@ bfeats <- batches %.% mutate(bat.n=length(oid),
                    bat.prank=rank(price)) %.%
             select(batch, starts_with('bat.'))
 
+## within batch features
+within.features <- list(size=c("iid", "mid", "color", "price"),
+                        color=c("iid", "mid", "size", "price"),
+                        iid=c("size", "color", "zsize", "price"),
+                        mid=c("size", "color", "zsize", "price"))
+
+
+bwi.feats <- NULL
+
+i <- 1
+for (fs in within.features) {
+    wi.f <- names(within.features)[i]
+    for (f in fs) {
+        cat(" :: ", wi.f, f, fill=T)
+        fname <- paste('bwi_', wi.f, '.uniq.', f, sep="")
+
+        grp <- do.call(group_by, c(list(raw.tr), 
+                                  as.list(c('batch', wi.f))))
+        ucnts <- eval(substitute(
+            (grp %.% mutate(counts=length(unique(f))))$count,
+            list(f=as.name(f))))
+
+        if (is.null(bwi.feats)) {
+            bwi.feats <- data.frame(ucnts)
+            names(bwi.feats) <- fname
+        }
+        else {
+            .feats <- data.frame(ucnts)
+            names(.feats) <- fname
+            bwi.feats <- cbind(bwi.feats, .feats)
+        }
+    }
+    i <- i + 1
+}
+
 ## customer per batch features
 cbatches <- group_by(raw.tr, cid, batch)
 cb.ret.rates <- cbatches %.% mutate(rrate=sum(return)/length(return), 
@@ -494,7 +532,7 @@ cb.avg.feats$cid.llr.rk <- log((cb.avg.feats$cid.avg.rrate+1) /
 raw.tr <- raw.tr[, -which(names(raw.tr) %in% c('color', 'oseas', 'deal', 'size'))]
 
 ftr <- cbind(raw.tr, all.feats, bfeats[, -1], cb.avg.feats[, -2],
-                  fan.feats, bwi.bint.feats)
+                  fan.feats, bwi.feats, bint.feats)
 
 # output
 save(ftr, file="/tmp/featmatrix_v4.Rdata")
