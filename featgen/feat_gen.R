@@ -483,7 +483,7 @@ fan.feats$rlowprice.by.cid <- fan.feats$nlowprice.by.cid /
 fan.feats$rlowprice.by.cid[all.feats$all.cnt.cid == 0] <- 0
 fan.feats$rlowdisc.by.cid <- fan.feats$nlowdisc.by.cid /
         all.feats$all.cnt.cid
-fan.feats$rlowprice.by.cid[all.feats$all.cnt.cid == 0] <- 0
+fan.feats$rlowdisc.by.cid[all.feats$all.cnt.cid == 0] <- 0
 
 ## batch features
 bfeats <- batches %.% mutate(bat.n=length(oid), 
