@@ -47,8 +47,10 @@ else {
 
 ####### Import Common data
 
+load("data/data_v2.Rdata")
+#tr <- read.csv("data/dataclean_v2_train.csv", header=T)
+
 # validation indicators
-tr <- read.csv("data/dataclean_v2_train.csv", header=T)
 vs <- NULL
 
 if (sidx <= 4) {
@@ -440,7 +442,7 @@ counts.and.llrs <- function(df, feats, c1=1.0, c2=1.0) {
 #                "pb25", "pb50", "pb100", "pb200", "pct.logpr")
 
 all.cols <- c("cid", "iid", "mid", "ztype", "zsize", "size", "color", 
-               "state", "month", "season", "dow") 
+               "state", "month", "season", "dow", "prend") 
 
 feats.2way <- combn(all.cols, 2)
 
