@@ -14,78 +14,70 @@
 ## R CMD BATCH --no-restore --no-save "--args 1" feat_gen.R
 
 rm(list = ls())
-library(reshape2)
 library(dplyr)
+library(FNN)
 
 args <- commandArgs(trailingOnly = T)
 if (length(args) == 0) {
     stop("You need to specify the set index.")
 }
 
-sidx <- as.numeric(args[1])
-set.name <- paste("ftr_v4.1_set", sidx, ".Rdata", sep="")
+sidx <- args[1]
 
-if (!(sidx %in% c(1, 2, 3, 4, 5, 6))) {
+set.name <- paste("fmx_", sidx, "_raw.Rdata", sep="")
+
+if (!(sidx %in% c("L1", "L2", "L3", "t1", "t2", "s1", "s2", "s3", "s4", "s5",
+                  "C1", "C2", "C3", "CM"))) {
     stop("Invalid set index.")
 }
 
-## Set indices
-if (sidx == 4) {
-    load("data/set4_v4.Rdata")
-}
-else {
-    load("data/sets_v4.Rdata")
-}
-
-# Import within batch features and batch interval features
-# generated previously with feature_extract.py (pandas)
-
-#fv32 <- read.csv("data/intvl_v4.csv", header=T)
-#bint.idx <- c(grep("bint.", names(fv32)))
-#bint.feats <- fv32[, bint.idx]
-#rm(fv32)
+load("data/sets_final.Rdata")
 
 ####### Import Common data
 
-load("data/data_v2.Rdata")
-#tr <- read.csv("data/dataclean_v2_train.csv", header=T)
-
 # validation indicators
-vs <- NULL
-
-if (sidx <= 4) {
-    vs <- data.frame(valid=part_va[, paste("S", sidx, sep="")])
-}
-
-if (sidx >= 5) {
-    vs <- data.frame(valid=part_va$S1)
-}
-
-raw.tr <- cbind(tr, vs)
-
-# If to generate subset...
-if (sidx >= 5) {
-    # combine training and validation
-    sset.idx <- as.logical(part_red == sidx) | vs$valid
-    raw.tr <- raw.tr[sset.idx, ]
-
-    # subset interval features as well
-    #bint.idx <- as.logical(part0_red == sidx) | part0_va$S1
-    #bint.feats <- bint.feats[bint.idx, ]
-}
+load("data/data_v2.Rdata")
 
 # remove all rows with deldate == NA
-raw.tr <- raw.tr[!is.na(raw.tr$deldate), ]
+raw.tr <- tr[!is.na(tr$deldate), ]
+
+# avoid leakage
+validset <- ind_va[, sidx]
+truth <- raw.tr$return[validset]
+raw.tr$return[validset] <- NA
+
+# just to be extra extra sure
+te$return <- NA
+
+setC <- F
+if (substr(sidx, 1, 1) == "C") {
+    setC <- T
+
+    # we need to temporarily remove deldate == NA rows from te
+    eff.rows <- !is.na(te$deldate)
+
+    orig.te <- te
+
+    # use only meaningful rows to build feature matrix
+    te <- te[eff.rows, ]
+
+    # drop all data from the "validation" portion of the training data,
+    # and stack it over the test data set.
+    real.tr <- raw.tr[!validset, ]
+    raw.tr <- rbind(real.tr, te)
+
+    # reconstruct validset indicators/masks
+    validset <- c(rep(FALSE, nrow(real.tr)), rep(TRUE, nrow(te)))
+
+    truth <- te$return #  -____-
+    rm(real.tr)
+}
 N <- nrow(raw.tr)
 
 ## group orders into batches and compute batch id
 cid.changes <- c(1, raw.tr$cid[2:N] - raw.tr$cid[1:(N-1)])
 cid.changes[cid.changes != 0] <- 1
 raw.tr$batch <- cumsum(cid.changes)
-
-# avoid leakage
-validset <- as.logical(raw.tr$valid)
-raw.tr$return[validset] <- NA
 
 #### End of data preprocessing
 
@@ -107,13 +99,12 @@ disc[is.na(disc)] = 0
 discr = (cbind(train,disc) %.% tbl_df() %.% group_by(batch) 
          %.% mutate(discr = rank(disc))) $ discr
 
-train = cbind(train , disc , discr) %.% as.data.frame() %.% tbl_df()
-#ggplot(filter(train , iid == 1) , aes(x = date , y = disc)) + geom_point(aes(color = season))
+train = cbind(train, disc , discr) %.% as.data.frame() %.% tbl_df()
 
 #pricer
 #the rank of price in each batch
 train = train %.% group_by(batch) %.% mutate(pricer = rank(price)) %.%
-arrange(oid) %.% as.data.frame() %.% tbl_df()
+as.data.frame() %.% tbl_df()
 
 #the max,min,mean price/disc by each item 
 #mindisc.by.iid
@@ -125,11 +116,10 @@ train = train %.% group_by(iid) %.%
 mutate(mindisc.by.iid = min(disc , na.rm = T) ,  
        meandisc.by.iid = mean(disc  , na.rm = T) , minprice.by.iid = min(price) , 
        maxprice.by.iid = max(price) , meanprice.by.iid = mean(price)) %.%
-arrange(oid) %.% as.data.frame() %.% tbl_df()
+as.data.frame() %.% tbl_df()
 
 #considering the local(the nearest 15 order) disc/price trend for items 
 #smooth with neighbor to be 15
-library(FNN)
 keverage = function(x , y) {
     if(length(x) < 16) {
         return(1)
@@ -152,7 +142,7 @@ mutate(pricediff = price - localprice ,
        discdiff = disc - localdisc , 
        outday.by.iid = min(date)) %.%
 mutate(deal = pricediff < 0) %.%
-arrange(oid) %.% as.data.frame() %.% tbl_df()
+as.data.frame() %.% tbl_df()
 
 #nlowprice.by.cid
 #nlowdisc.by.cid
@@ -171,8 +161,7 @@ mutate(nlowprice.by.cid = sum(price < 100) , nlowdisc.by.cid = sum(disc < 0.8) ,
        totalspend.by.cid = sum(price) , meanspend.by.cid = mean(price) ,
        nonreturnspend.by.cid = sum(price * (return==0) , na.rm = T) , 
        returnspend.by.cid = sum(price * (return == 1) , na.rm = T)) %.% 
-arrange(oid) %.% as.data.frame() %.% tbl_df()
-
+as.data.frame() %.% tbl_df()
 
 #some by.batch.cid feature(xin have done this)
 #train = train %.% group_by(date , cid) %.% mutate(mbspend = mean(price) , bsize = n()) %.%
@@ -182,10 +171,10 @@ arrange(oid) %.% as.data.frame() %.% tbl_df()
 
 #outseason.by.iid
 outseason.by.iid = rep(5 , nrow(train))
-outseason.by.iid[train$outday < 61] = 1
-outseason.by.iid[train$outday > 60 & train$outday < 153] = 2
-outseason.by.iid[train$outday > 152 & train$outdat < 245] = 3
-outseason.by.iid[train$outday > 244 & train$outday < 237] = 4
+outseason.by.iid[train$outday.by.iid < 61] = 1
+outseason.by.iid[(train$outday.by.iid > 60) & (train$outday.by.iid < 153)] = 2
+outseason.by.iid[(train$outday.by.iid > 152) & (train$outday.by.iid < 245)] = 3
+outseason.by.iid[(train$outday.by.iid > 244) & (train$outday.by.iid < 337)] = 4
 train = as.data.frame(cbind(train , outseason.by.iid)) %.% tbl_df()
 
 ##############################################################
@@ -207,7 +196,6 @@ check_return_before = function(dord , ret) {
     }
     return(res)
 }
-
 
 check_keep_before = function(dord , ret) {
     n = length(dord)
@@ -302,7 +290,7 @@ mutate(rb.by.cid.iid.price = check_return_before(date,return),
        kb.by.cid.iid.price = check_keep_before(date,return),
        rf.by.cid.iid.price = check_return_future(date,return),
        kf.by.cid.iid.price = check_keep_future(date,return)) %.%
-arrange(oid) %.% as.data.frame() %.% tbl_df()
+as.data.frame() %.% tbl_df()
 
 #rb.by.cid.iid.color.size
 #kb.by.cid.iid.color.size
@@ -316,7 +304,7 @@ mutate(rb.by.cid.iid.color.size = check_return_before(date,return),
        kb.by.cid.iid.color.size = check_keep_before(date,return),
        rf.by.cid.iid.color.size = check_return_future(date,return),
        kf.by.cid.iid.color.size = check_keep_future(date,return)) %.%
-arrange(oid) %.% as.data.frame() %.% tbl_df()
+as.data.frame() %.% tbl_df()
 
 #rb.by.cid.iid
 #ob.by.cid.iid
@@ -332,7 +320,7 @@ mutate(rb.by.cid.iid = check_return_before(date,return),
        rf.by.cid.iid = check_return_future(date,return),
        of.by.cid.iid = check_order_future(date,return),
        kf.by.cid.iid = check_keep_future(date,return)) %.%
-arrange(oid) %.% as.data.frame() %.% tbl_df()
+as.data.frame() %.% tbl_df()
 
 #rb.by.cid.price
 #ob.by.cid.price
@@ -346,39 +334,40 @@ mutate(rb.by.cid.price = check_return_before(date,return),
        kb.by.cid.price = check_keep_before(date,return),
        rf.by.cid.price = check_return_future(date,return),
        kf.by.cid.price = check_keep_future(date,return)) %.%
-arrange(oid) %.% as.data.frame() %.% tbl_df()
+as.data.frame() %.% tbl_df()
 
 #the price rank of price of the iid ordered by a cid
 #rankprice.by.cid.iid 
 train = train %.% group_by(cid , iid) %.%
   mutate(rankprice.by.cid.iid = rank(price)) %.%
-  arrange(oid) %.% as.data.frame() %.% tbl_df()
+  as.data.frame() %.% tbl_df()
 
 
 ntotal = nrow(train)
 #llr.by.price
 ##return+1/#keep+1
 train = train %.% group_by(price) %.% 
-mutate(llr.by.price = log((sum(return , na.rm = T)+1) / (1+length(return)-sum(return,na.rm=T)))) %.%
-arrange(oid) %.% as.data.frame() %.% tbl_df()
-dummy = train
-k = (dummy %.% group_by(batch , price) %.% mutate(k = sum(return , rm.na = T)))$k
-n = (dummy %.% group_by(price) %.% mutate(n = n()))$n
-train$llr.by.price = train$llr.by.price * (n - k)/n
-rm(dummy , k , n)
+mutate(llr.by.price = log((sum(return , na.rm = T)+0.5) / (0.5+length(return)-sum(return,na.rm=T)))) %.%
+as.data.frame() %.% tbl_df()
+#dummy = train
+#k = (dummy %.% group_by(batch , price) %.% mutate(k = sum(return , rm.na = T)))$k
+#n = (dummy %.% group_by(price) %.% mutate(n = n()))$n
+#train$llr.by.price = train$llr.by.price * (n - k)/n
+#rm(dummy , k , n)
 
 #llr.by.cid.price
 #return rate by each price each cid
 train = train %.% group_by(cid , price) %.% 
-mutate(llr.by.cid.price = log((sum(return , na.rm = T)+1) / (1+length(return)-sum(return,na.rm=T)))) %.%
-arrange(oid) %.% as.data.frame() %.% tbl_df()
-dummy = train
-k = (dummy %.% group_by(batch , cid , price) %.% mutate(k = sum(return , rm.na = T)))$k
-n = (dummy %.% group_by(cid , price) %.% mutate(n = n()))$n
-train$llr.by.cid.price = train$llr.by.cid.price * (n - k)/n
-rm(dummy , k , n)
+mutate(llr.by.cid.price = log((sum(return , na.rm = T)+0.5) / (0.5+length(return)-sum(return,na.rm=T)))) %.%
+as.data.frame() %.% tbl_df()
+#dummy = train
+#k = (dummy %.% group_by(batch , cid , price) %.% mutate(k = sum(return , rm.na = T)))$k
+#n = (dummy %.% group_by(cid , price) %.% mutate(n = n()))$n
+#train$llr.by.cid.price = train$llr.by.cid.price * (n - k)/n
+#rm(dummy , k , n)
+
 #remove old features
-fan.feats = train[, 31:72]
+fan.feats <- train[, -c(1:29)]
 
 rm(train)
 
@@ -386,37 +375,40 @@ rm(train)
 ###    End of Fan's features      ####
 ######################################
 
-# split into training and validation
-#trt <- raw.tr[validset, ]
-#trv <- raw.tr[!validset, ]
-
 batches <- group_by(raw.tr, 'batch')
 
 ## item freshness 
-raw.tr$f1w <- as.factor(fan.feats$outday.by.iid <= 7)
-raw.tr$f2w <- as.factor(fan.feats$outday.by.iid <= 14)
-raw.tr$f1m <- as.factor(fan.feats$outday.by.iid <= 30)
-raw.tr$f3m <- as.factor(fan.feats$outday.by.iid <= 90)
-raw.tr$f6m <- as.factor(fan.feats$outday.by.iid <= 180)
+raw.tr$f1w <- fan.feats$outday.by.iid <= 7
+raw.tr$f2w <- fan.feats$outday.by.iid <= 14
+raw.tr$f1m <- fan.feats$outday.by.iid <= 30
+raw.tr$f3m <- fan.feats$outday.by.iid <= 90
+raw.tr$f6m <- fan.feats$outday.by.iid <= 180
 raw.tr$oseas <- fan.feats$outseason.by.iid
 
-raw.tr$isdisc <- as.factor(fan.feats$disc < 1)
-raw.tr$deal <- as.factor(fan.feats$deal)
-raw.tr$lowdisc <- as.factor(fan.feats$disc <= 0.8)
+raw.tr$isdisc <- fan.feats$disc < 1
+raw.tr$deal <- fan.feats$deal
+raw.tr$lowdisc <- fan.feats$disc <= 0.8
 
 ## price ranges
-raw.tr$pb25 <- as.factor(raw.tr$price < 25)
-raw.tr$pb50 <- as.factor(raw.tr$price < 50)
-raw.tr$pb100 <- as.factor(raw.tr$price < 100)
-raw.tr$pb200 <- as.factor(raw.tr$price < 200)
+raw.tr$pb25 <- raw.tr$price < 25
+raw.tr$pb50 <- raw.tr$price < 50
+raw.tr$pb100 <- raw.tr$price < 100
+raw.tr$pb200 <- raw.tr$price < 200
+
+# negative deldays?
+raw.tr$negdeld <- raw.tr$deldays < 0
 
 pr <- raw.tr$price
 pr[pr == 0] <- 1 
-raw.tr$pct.logpr <- as.factor(round((log(pr) - log(min(pr))) / 
-                   (log(max(pr)) - log(min(pr))) * 20))
+raw.tr$pct.logpr <- round((log(pr) - log(min(pr))) / 
+                   (log(max(pr)) - log(min(pr))) * 20)
+
+vgroup_by <- function(df, feats) {
+    return (do.call(group_by, c(list(df), as.list(feats))))
+}
 
 ## To compute counts and LLRs for given "feats", the combation of features.
-counts.and.llrs <- function(df, feats, c1=1.0, c2=1.0) {
+counts.and.llrs <- function(df, feats, c1=0.5, c2=0.5) {
     # use do.call to expand combination of features into arguments
     grp <- do.call(group_by, c(list(df), as.list(feats)))
 
@@ -436,13 +428,8 @@ counts.and.llrs <- function(df, feats, c1=1.0, c2=1.0) {
 }
 
 ## historical features
-# all.cols <- c("cid", "iid", "mid", "ztype", "zsize", "size", "color", 
-#                "state", "month", "season", "dow", "f1w", "f2w", "f1m",
-#                "f3m", "f6m", "oseas", "isdisc", "deal", "lowdisc",
-#                "pb25", "pb50", "pb100", "pb200", "pct.logpr")
-
 all.cols <- c("cid", "iid", "mid", "ztype", "zsize", "size", "color", 
-               "state", "month", "season", "dow", "prend") 
+               "state", "month", "season", "dow", "prend", "sal")
 
 feats.2way <- combn(all.cols, 2)
 
@@ -465,11 +452,7 @@ for (i in 1:ncol(feats.2way)) {
     c1 <- cols[1]
     c2 <- cols[2]
 
-    # skip useless 2-way interactions
-    if (all(which(all.cols == c1) > 11) && 
-        all(which(all.cols == c2) > 11)) next
-
-    cat(" :: ", cols, fill=T)
+    cat(" :: [all-2way] ", cols, fill=T)
 
     fnames <- paste(c("all.cnt.", "all.llr."), 
                     paste(cols, collapse="_"), sep="") 
@@ -479,6 +462,14 @@ for (i in 1:ncol(feats.2way)) {
     all.feats <- cbind(all.feats, .feats)
 }
 
+# 3way interaction: color_state_iid
+.feats = counts.and.llrs(raw.tr, c("state", "iid", "color"))
+names(.feats) <- c("all.cnt.state_iid_color", "all.llr.state_iid_color")
+all.feats <- cbind(all.feats, .feats)
+.feats = counts.and.llrs(raw.tr, c("state", "mid", "color"))
+names(.feats) <- c("all.cnt.state_mid_color", "all.llr.state_mid_color")
+all.feats <- cbind(all.feats, .feats)
+
 # ratio of low price / low discount
 fan.feats$rlowprice.by.cid <- fan.feats$nlowprice.by.cid / 
         all.feats$all.cnt.cid
@@ -487,7 +478,7 @@ fan.feats$rlowdisc.by.cid <- fan.feats$nlowdisc.by.cid /
         all.feats$all.cnt.cid
 fan.feats$rlowdisc.by.cid[all.feats$all.cnt.cid == 0] <- 0
 
-## batch features
+## batch features with some selected interactions
 bfeats <- batches %.% mutate(bat.n=length(oid), 
                    bat.uniq.iid=length(unique(iid)),
                    bat.uniq.mid=length(unique(mid)),
@@ -495,11 +486,80 @@ bfeats <- batches %.% mutate(bat.n=length(oid),
                    bat.uniq.color=length(unique(color)),
                    bat.uniq.ztype=length(unique(ztype)),
                    bat.uniq.zsize=length(unique(zsize)),
-                   bat.prank=rank(price)) %.%
-            select(batch, starts_with('bat.'))
+                   bat.uniq.mid_zsize=nrow(unique(cbind(mid, zsize))),
+                   bat.uniq.ztype_zsize=nrow(unique(cbind(ztype, zsize))),
+                   bat.uniq.iid_color=nrow(unique(cbind(iid, color))),
+                   bat.uniq.mid_color=nrow(unique(cbind(mid, color)))
+                   ) %.%
+            select(batch, starts_with('bat.')) %.%
+            as.data.frame()
+            
+# factorized batch size
+raw.tr$fbat.n <- cut(bfeats$bat.n, breaks=c(0, 2, 6, Inf),
+                     labels=c("1-2", "3-6", "6+"))
+
+# as per Fan's suggestion, interaction between batch size and salutation.
+.feats = counts.and.llrs(raw.tr, c("fbat.n", "sal"))
+names(.feats) <- c("all.cnt.fbn_sal", "all.llr.fbn_sal")
+all.feats <- cbind(all.feats, .feats)
+
+# indicator if multiple items
+bfeats$bat.mulitem <- bfeats$bat.n > 1
+
+## batch counts / other counts / max counts
+bf.colname <- c("iid", "mid", "size", "color", "zsize", "ztype")
+bf.list <- c(as.list(bf.colname), 
+             lapply(apply(combn(bf.colname, 2), 2, list), function(x) x[[1]]))
+
+# remove obvious nested structures
+bf.list <- setdiff(bf.list,
+                   # order agnostic, so just remove every possibility.
+                   list(c("iid", "mid"), c("mid", "iid"),
+                        c("zsize", "size"), c("size", "zsize")))
+bf.list <- c(bf.list, list(c("iid", "zsize", "color")))
+
+for (bf in bf.list) {
+    cat(" :: [bat.cnt] ", bf, fill=T)
+
+    fname <- ifelse(length(bf) == 3, 'exact', paste(bf, collapse="_"))
+
+    grp <- vgroup_by(raw.tr, c("batch", bf))
+    .cnt <- (grp %.% mutate(counts=length(oid)))$counts
+    bfeats[paste("bat.cnt.", fname, sep="")] <- .cnt
+
+    # duplicates?
+    bfeats[paste("bat.dup.", fname, sep="")] <- .cnt > 1
+    
+    ## other counts
+    bfeats[paste("bat.other.", fname, sep="")] <- bfeats$bat.n - .cnt 
+}
+
+# entire batch has duplicates?
+mod.batches <- group_by(bfeats, batch)
+for (bf in bf.list) {
+    cat(" :: [bat.dup] ", bf, fill=T)
+
+    fname <- ifelse(length(bf) == 3, 'exact', paste(bf, collapse="_"))
+
+    ndup <- paste("bat.dup.", fname, sep="")
+    ncnt <- paste("bat.cnt.", fname, sep="")
+
+    bfeats[paste("bat.hasdup.", fname, sep="")] <- eval(substitute(
+        (mod.batches %.% mutate(hasdup=any(dupname)))$hasdup,
+        list(dupname=as.name(ndup))))
+}
+
+raw.tr$bczz <- bfeats$bat.cnt.zsize_ztype
+
+# all.llr.bcnt.ztype_zsize
+.feats = counts.and.llrs(raw.tr, c("bczz"))
+names(.feats) <- c("all.cnt.bcnt.ztype_zsize", "all.llr.bcnt.ztype_zsize")
+all.feats <- cbind(all.feats, .feats)
 
 ## within batch features
 within.features <- list(size=c("iid", "mid", "color", "price"),
+                        zsize=c("iid", "mid", "color", "price", "ztype"),
+                        ztype=c("iid", "mid", "color", "price", "zsize"),
                         color=c("iid", "mid", "size", "price"),
                         iid=c("size", "color", "zsize", "price"),
                         mid=c("size", "color", "zsize", "price"))
@@ -510,7 +570,7 @@ i <- 1
 for (fs in within.features) {
     wi.f <- names(within.features)[i]
     for (f in fs) {
-        cat(" :: ", wi.f, f, fill=T)
+        cat(" :: [bwi] ", wi.f, f, fill=T)
         fname <- paste('bwi_', wi.f, '.uniq.', f, sep="")
 
         grp <- do.call(group_by, c(list(raw.tr), 
@@ -536,16 +596,16 @@ for (fs in within.features) {
 cbatches <- group_by(raw.tr, cid, batch)
 cb.ret.rates <- cbatches %.% mutate(rrate=sum(return)/length(return), 
                                     krate=1-sum(return)/length(return)) %.% 
-                select(cid, batch, rrate, krate)
+                select(cid, batch, rrate, krate) %.% as.data.frame()
 
 # only set the first order of each batch to be the true rate, others set to be
 # NA
 cb.ret.srates <- cbatches %.% 
-                 mutate(srrate=c(sum(return)/length(return), 
+                 mutate(srrate=c(sum(return, na.rm=T)/length(return), 
                                  rep(NA, length(return)-1)),
-                        skrate=c(1-sum(return)/length(return), 
+                        skrate=c(1-sum(return, na.rm=T)/length(return), 
                                  rep(NA, length(return)-1))) %.%
-                 select(cid, batch, srrate, skrate)
+                 select(cid, batch, srrate, skrate) %.% as.data.frame()
 
 cb.ret.rates$srrate <- cb.ret.srates$srrate
 cb.ret.rates$skrate <- cb.ret.srates$skrate
@@ -559,24 +619,71 @@ cb.avg.feats <- group_by(cb.ret.rates, cid) %.%
                        cbat.avg.krate=mean(skrate, na.rm=T),
                        cbat.sum.rrate=sum(srrate, na.rm=T),
                        cbat.sum.krate=sum(skrate, na.rm=T)) %.%
-                select(cid, batch, starts_with('cbat.'))
+                select(cid, batch, starts_with('cbat.')) %.% as.data.frame()
 
 # log-likelihood ratio of return over kept
-cb.avg.feats$cbat.llr.rk <- log((cb.avg.feats$cbat.avg.rrate+1) /
-                               (cb.avg.feats$cbat.avg.krate+1))
+cb.avg.feats$cbat.llr.rk <- log((cb.avg.feats$cbat.avg.rrate+0.5) /
+                               (cb.avg.feats$cbat.avg.krate+0.5))
 
 names(cb.avg.feats)
 
-# remove color and oseas
-raw.tr <- raw.tr[, -which(names(raw.tr) %in% c('oseas', 'deal'))]
-
+# some cleanups
+raw.tr <- raw.tr[, -which(names(raw.tr) %in% c('oseas', 'deal', 
+                                               'season', 'ddr', 'bczz'))]
 
 ftr <- cbind(raw.tr, all.feats, bfeats[, -1], cb.avg.feats[, -c(1, 2)],
                   fan.feats, bwi.feats)
-#ftr <- cbind(raw.tr, all.feats, bfeats[, -1], cb.avg.feats[, -2],
-#                  fan.feats, bwi.feats, bint.feats)
 
+# only output the "valid" set, which will be divided into train and valid
+# by user.
+ftr <- ftr[validset, ]
 
-# output
-save(ftr, file=paste("data/", set.name, sep=""))
-#write.csv(feat.mat, file="featmatrix_v5_part1.csv", row.names=F)
+# restore the truth
+ftr$return <- truth
+
+# if we are generating feature matrix for CX (X can be 1/2/3/M),
+# we need to restore the feature matrix back to 50078 rows !!
+if (setC) {
+    # what the fuck is this?
+    imp.ftr <- rbind(ftr, ftr)[1:length(eff.rows), ]
+
+    names(imp.ftr) <- names(ftr)
+
+    # now we need to impute the features..
+    # first let's restore the basic, original features
+    imp.ftr[!eff.rows, 1:26] <- orig.te[!eff.rows, 
+                                        -which(names(orig.te) %in% c("ddr", "season"))]
+    imp.ftr[!eff.rows, 'batch'] <- 0
+    # just copy some random data to impute the features
+    imp.ftr[!eff.rows, 28:ncol(ftr)] <- ftr[1:sum(!eff.rows), 28:ncol(ftr)]
+
+    # put the features in the correct place
+
+    imp.ftr[eff.rows, ] <- ftr
+    for (i in 1:ncol(ftr)) {
+        imp.ftr[eff.rows, i] <- ftr[, i]
+    }
+
+    imp.ftr$return <- NA
+    rownames(imp.ftr) <- seq(1, nrow(imp.ftr))
+
+    # sanity check
+    all(sort(imp.ftr$oid) == imp.ftr$oid)
+
+    # output
+    ftr <- imp.ftr
+    save(ftr, file=paste("data/", set.name, sep=""))
+
+} else {
+    # output
+    save(ftr, file=paste("data/", set.name, sep=""))
+}
+
+## alright, we're done here.
+## well... not quite. still need post-processing.
+## it is why the output is named xxx_raw.Rdata.
+
+####################################################
+###       Post PROCESSING ARRGHHHHHHHH!!!!       ###
+####################################################
+
