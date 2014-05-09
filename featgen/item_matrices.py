@@ -8,27 +8,59 @@ depending on discussions with Fan and Cory.
 
 from scipy import sparse
 from sklearn import preprocessing
-from itertools import combinations
+from itertools import permutations, repeat
 from collections import Counter
+from argparse import ArgumentParser
 
 import sys
 
 import pandas as pd
 import numpy as np
 
-def main():
-    train = pd.read_csv(sys.argv[1])
-    vs = pd.read_csv(sys.argv[2])
+def elems_to_coo_matrix(coords, shape):
+    """Converts a list of 3-tuples, where each 3-tuple encodes:
+        (data, rowidx, colidx),
+       into a COOrdinate sparse matrix."""
 
-    validset = vs['L3']
+    data, i, j = zip(*coords)
+    return sparse.coo_matrix((data, (i, j)), shape=shape)
+
+def main():
+    parser = ArgumentParser(
+        description="Generate network model features.")
+    parser.add_argument("-d", dest="data_matrix", required=True,
+                        help="Original data matrix, in CSV format.")
+    parser.add_argument("-v", dest="validset", required=True,
+                        help="Validation/classification set indicators, in CSV"
+                        " format")
+
+    parser.add_argument("set_id", choices=["L1", "L2", "L3", "C1", "C2", "C3",
+                                        "CM", "t1", "t2", "s1", "s2", "s3",
+                                        "s4", "s5"])
+
+    parser.add_argument("features", nargs="+",
+                        help="Features to be used to build the network model.")
+
+    args = parser.parse_args()
+
+    train = pd.read_csv(args.data_matrix)
+    vs = pd.read_csv(args.validset)
+
+    validset = vs[args.set_id]
 
     # remove all rows with deldate == NA
     train = train.drop(train.index[np.isnan(train['deldate'])])
     # reset index
     train.index = range(len(train))
 
+    nm_feat = args.features[0]
+    if len(args.features) > 1:
+        nm_feat = "_".join(args.features)
+        train[nm_feat] = list(train[nm_feat].itertuples(index=False))
+        args.features = [nm_feat]
+
     # subsetting columns that we need
-    cols_subset = ['cid', 'iid', 'mid'] 
+    cols_subset = ['cid'] + args.features
 
     # split into training set and learning set
     tr = train[~validset] 
@@ -37,37 +69,43 @@ def main():
     # leakage protection
     va.ix[:, 'return'] = np.nan
     
+    print("Encoding features into indices...")
     encoders = {}
     # relabel iid, cid, mid
     for col in cols_subset:
         lblenc = preprocessing.LabelEncoder()
         # fitting using the union of all possible values
-        # that can exist both in training and learning sets.
+        # that can exist both in training and learning sets.  
         encoders[col] = lblenc.fit(train[col])
 
         tr.ix[:, col] = lblenc.transform(tr[col])
         va.ix[:, col] = lblenc.transform(va[col])
 
-    nitems = len(encoders['iid'].classes_)
+    nflvls = len(encoders[nm_feat].classes_)
     ncusts = len(encoders['cid'].classes_)
 
-    # deprecated: using sklearn.preprocessing.LabelEncoder() instead.
-    # nitems = sorted(set(train['iid']))
-    # iidmap = dict(zip(nitems, range(len(nitems))))
+    # use COOrdinated sparse matrices to build these counters fast
+    # kept/kept, kept/return, return/kept, return/return
+    # .append((value, rowidx, colidx))
 
-    count_matrices = [
-        np.zeros((nitems, nitems), dtype=int), # kept/kept
-        np.zeros((nitems, nitems), dtype=int), # kept/return
-        np.zeros((nitems, nitems), dtype=int), # return/kept
-        np.zeros((nitems, nitems), dtype=int), # return/return
-    ]
+    count_matrices = [[], [], [], []]
+    #count_matrices = [
+    #    np.zeros((nflvls, nflvls), dtype=int), # kept/kept
+    #    np.zeros((nflvls, nflvls), dtype=int), # kept/return
+    #    np.zeros((nflvls, nflvls), dtype=int), # return/kept
+    #    np.zeros((nflvls, nflvls), dtype=int), # return/return
+    #]
 
     # sparse matrices, since customer purchase history will be 
     # VERY VERY sparse in reality
-    #Cret = sparse.lil_matrix((ncusts, nitems))
-    #Ckep = sparse.lil_matrix((ncusts, nitems))
-    Cret = np.zeros((ncusts, nitems))
-    Ckep = np.zeros((ncusts, nitems))
+    #Cret = sparse.lil_matrix((ncusts, nflvls))
+    #Ckep = sparse.lil_matrix((ncusts, nflvls))
+    #Cret = np.zeros((ncusts, nflvls))
+    #Ckep = np.zeros((ncusts, nflvls))
+
+    # Again, use COOrdinated sparse matrix
+    Cret = []
+    Ckep = []
 
     # this will sort cid in the transformed order
     customers = tr.groupby('cid', sort=True)
@@ -78,48 +116,51 @@ def main():
 
         sub_df = tr.ix[gidx, :]
 
-        items = list(sub_df[['iid', 'return']].itertuples(index=False))
+        items = list(sub_df[[nm_feat, 'return']].itertuples(index=False))
 
         # if the exact same pair occurs multiple times for a given customer,
         # only count as once.
-        all_pairs = set(combinations(
-            sub_df[['iid', 'return']].itertuples(index=False), 2))
+        all_pairs = set(permutations(
+            sub_df[[nm_feat, 'return']].itertuples(index=False), 2))
 
         # keepers
-        _keeps = [iid for iid, ret in items if ret == 0]
+        _keeps = [f for f, ret in items if ret == 0]
         if _keeps:
-            indx, summand = zip(*tuple(Counter(_keeps).items()))
+            findx, summand = zip(*tuple(Counter(_keeps).items()))
 
-            _chist = np.zeros(nitems)
-            _chist[list(indx)] += summand
-
-            Ckep[cid, :] = _chist
+            # row: cid, col: findx
+            Ckep.extend(zip(summand, repeat(cid), findx))
 
         # returns
-        _rets = [iid for iid, ret in items if ret == 1]
+        _rets = [f for f, ret in items if ret == 1]
         if _rets:
-            indx, summand = zip(*tuple(Counter(_rets).items()))
+            findx, summand = zip(*tuple(Counter(_rets).items()))
 
-            _chist = np.zeros(nitems)
-            _chist[list(indx)] += summand
+            # row: cid, col: findx
+            Cret.extend(zip(summand, repeat(cid), findx))
 
-            Cret[cid, :] = _chist
-
-        for (iid1, ret1), (iid2, ret2) in all_pairs:
+        for (f1, ret1), (f2, ret2) in all_pairs:
             matidx = ret1 * 2 + ret2
 
-            count_matrices[matidx][iid1, iid2] += 1
-            if matidx == 1 or matidx == 2:
-                # symmetric keep/return - return/keep
-                count_matrices[3-matidx][iid2, iid1] += 1
-            else:
-                count_matrices[matidx][iid2, iid1] += 1
+            count_matrices[matidx].append((1, f1, f2))
+
+            #count_matrices[matidx][iid1, iid2] += 1
+            #if matidx == 1 or matidx == 2:
+            #    # symmetric keep/return - return/keep
+            #    count_matrices[3-matidx][iid2, iid1] += 1
+            #else:
+            #    count_matrices[matidx][iid2, iid1] += 1
 
     print("Converting to sparse matrices...")
-    Ckep = sparse.csr_matrix(Ckep)
-    Cret = sparse.csr_matrix(Cret)
+    # convert the list of matrix entries into COO matrix,
+    # then CSR matrix.
+    Ckep = sparse.csr_matrix(elems_to_coo_matrix(
+        Ckep, (ncusts, nflvls)))
+    Cret = sparse.csr_matrix(elems_to_coo_matrix(
+        Cret, (ncusts, nflvls)))
     for i in range(4):
-        count_matrices[i] = sparse.csc_matrix(count_matrices[i])
+        count_matrices[i] = sparse.csc_matrix(
+            elems_to_coo_matrix(count_matrices[i], (nflvls, nflvls)))
 
     print("Matrix multiplications...")
 
@@ -129,7 +170,6 @@ def main():
 
     Nret_kept = (Cret * count_matrices[2]).toarray()
     Nret_ret = (Cret * count_matrices[3]).toarray()
-
 
     del Ckep
     del Cret
@@ -146,10 +186,10 @@ def main():
 
     print("Generating features...")
 
-    llr_kept = [Mllr_kept[cid, iid]
-                for cid, iid in va[['cid', 'iid']].itertuples(index=False)]
-    llr_ret = [Mllr_ret[cid, iid]
-                for cid, iid in va[['cid', 'iid']].itertuples(index=False)]
+    llr_kept = [Mllr_kept[cid, f]
+                for cid, f in va[cols_subset].itertuples(index=False)]
+    llr_ret = [Mllr_ret[cid, f]
+                for cid, f in va[cols_subset].itertuples(index=False)]
 
     llrs = pd.DataFrame({'nm.llr.kept': llr_kept, 'nm.llr.ret': llr_ret})
     llrs.to_csv("llr.csv")
