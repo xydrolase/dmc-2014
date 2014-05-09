@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 # -*- coding: utf-8
 
+from __future__ import print_function
+
 """
 Implementing a network model that advanced by Guillermo, Zoe and Cory,
 depending on discussions with Fan and Cory.
@@ -54,9 +56,12 @@ def main():
     train.index = range(len(train))
 
     nm_feat = args.features[0]
+    print(args.features)
     if len(args.features) > 1:
         nm_feat = "_".join(args.features)
-        train[nm_feat] = list(train[nm_feat].itertuples(index=False))
+        # convert tuples to strings, otherwise can't be transformed.
+        train[nm_feat] = ['/'.join(map(str, x))
+            for x in train[args.features].itertuples(index=False)]
         args.features = [nm_feat]
 
     # subsetting columns that we need
@@ -151,16 +156,18 @@ def main():
             #else:
             #    count_matrices[matidx][iid2, iid1] += 1
 
+
     print("Converting to sparse matrices...")
     # convert the list of matrix entries into COO matrix,
     # then CSR matrix.
-    Ckep = sparse.csr_matrix(elems_to_coo_matrix(
-        Ckep, (ncusts, nflvls)))
-    Cret = sparse.csr_matrix(elems_to_coo_matrix(
-        Cret, (ncusts, nflvls)))
+    Ckep = elems_to_coo_matrix(
+        Ckep, (ncusts, nflvls)).tocsr()
+    Cret = elems_to_coo_matrix(
+        Cret, (ncusts, nflvls)).tocsr()
+
     for i in range(4):
-        count_matrices[i] = sparse.csc_matrix(
-            elems_to_coo_matrix(count_matrices[i], (nflvls, nflvls)))
+        count_matrices[i] = elems_to_coo_matrix(
+                count_matrices[i], (nflvls, nflvls)).tocsc()
 
     print("Matrix multiplications...")
 
@@ -192,7 +199,7 @@ def main():
                 for cid, f in va[cols_subset].itertuples(index=False)]
 
     llrs = pd.DataFrame({'nm.llr.kept': llr_kept, 'nm.llr.ret': llr_ret})
-    llrs.to_csv("llr.csv")
+    llrs.to_csv("{0}_nm_llr_{1}.csv".format(args.set_id, nm_feat), index=False)
 
 if __name__ == "__main__":
     main()
