@@ -153,9 +153,11 @@ def batch_summarize(bat_df, u_feats, wi_feats):
         [x if type(x) is str else '_'.join(x) for x in u_feats])
 
     # aggregation of all per batch features
-    u_values = [len(set(bat_df[feat])) for feat in u_feats]
+    u_values = map(lambda n: np.repeat(n, len(bat_df)), 
+                   [len(set(bat_df[feat])) for feat in u_feats])
 
-    data = list(zip(u_names, u_values))
+    #data = list(zip(u_names, u_values))
+    data = []
 
     # b) within feature features: WIiid.size ...
     for wi_feat, agg_feats in wi_feats.items():
@@ -166,6 +168,9 @@ def batch_summarize(bat_df, u_feats, wi_feats):
             wi_data = _group[_feat].apply(trans_unique_count)
 
             data.append((wi_name, wi_data))
+            print(wi_name)
+            print(wi_data)
+            input()
 
     # IMPORATANT: mirroring index!
     df = pd.DataFrame(dict(data), index=bat_df.index)
